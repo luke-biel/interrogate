@@ -1,0 +1,10 @@
+[package]
+name = "interrogate"
+version = "0.1.0"
+edition = "2018"
+
+[workspace]
+members = [".", "interrogate_macros"]
+
+[dependencies]
+interrogate_macros = { path = "interrogate_macros" }
