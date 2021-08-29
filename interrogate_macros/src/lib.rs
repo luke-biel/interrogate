@@ -71,7 +71,7 @@ impl Parse for InterrogateAttr {
 }
 
 #[proc_macro_attribute]
-pub fn interrogate(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn fact(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = parse_macro_input!(attr as InterrogateAttr);
 
     let fun = parse_macro_input!(item as ItemFn);

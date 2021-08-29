@@ -2,7 +2,7 @@
 
 use interrogate_macros::test_def_impl;
 
-pub use interrogate_macros::interrogate;
+pub use interrogate_macros::fact;
 
 pub trait TestDef {
     fn run(&self) -> bool;
