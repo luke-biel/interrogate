@@ -4,9 +4,11 @@ use convert_case::{Case, Casing};
 use itertools::Itertools;
 use proc_macro::{SourceFile, TokenStream};
 use quote::quote;
+use std::time::{SystemTime, UNIX_EPOCH};
 use syn::parse::{Parse, ParseStream};
-use syn::punctuated::Punctuated;
-use syn::{parse_macro_input, Expr, FnArg, Ident, ItemFn, Path, Token, Type, Visibility, ExprLit, Lit};
+use syn::{
+    parse_macro_input, punctuated::Punctuated, Expr, FnArg, Ident, ItemFn, Lit, LitStr, Token,
+};
 
 struct TestDefImplArgs {
     arg_generics: Punctuated<Ident, Token![,]>,
@@ -60,12 +62,85 @@ pub fn test_def_impl(item: TokenStream) -> TokenStream {
 
 struct InterrogateAttr {
     args: Punctuated<Expr, Token![,]>,
+    result: Option<InterrogateResult>,
+    description: Option<InterrogateDescription>,
+}
+
+struct InterrogateResult {
+    fat_arrow: Token![=>],
+    result: Expr,
+}
+
+struct InterrogateDescription {
+    semicolon: Token![;],
+    text: LitStr,
 }
 
 impl Parse for InterrogateAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Self {
-            args: input.parse_terminated(Expr::parse)?,
+            args: {
+                let mut acc: Punctuated<_, Token![,]> = Punctuated::new();
+                let mut last_item_expr = false;
+                loop {
+                    if input.is_empty() {
+                        break;
+                    }
+
+                    let lookahead1 = input.lookahead1();
+
+                    if last_item_expr {
+                        if lookahead1.peek(Token![,]) {
+                            acc.push_punct(input.parse()?);
+                            last_item_expr = false;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        let expr: Expr = match input.parse() {
+                            Ok(expr) => expr,
+                            Err(_) => break,
+                        };
+                        acc.push(expr);
+                        last_item_expr = true;
+                    }
+                }
+                acc
+            },
+            result: {
+                let lookahead1 = input.lookahead1();
+                if lookahead1.peek(Token![=>]) {
+                    Some(input.parse()?)
+                } else {
+                    None
+                }
+            },
+            description: {
+                let lookahead1 = input.lookahead1();
+                if lookahead1.peek(Token![;]) {
+                    Some(input.parse()?)
+                } else {
+                    None
+                }
+            },
+        })
+    }
+}
+
+impl Parse for InterrogateResult {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            fat_arrow: input.parse()?,
+            result: input.parse()?,
+        })
+    }
+}
+
+impl Parse for InterrogateDescription {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            semicolon: input.parse()?,
+            text: input.parse()?,
         })
     }
 }
@@ -79,7 +154,8 @@ pub fn fact(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ident = fun.sig.ident.clone();
     let source_file = ident.span().unwrap().source_file();
 
-    let full_name = make_full_name(&ident, &source_file, &attr);
+    let full_name = make_const_name(&ident, &source_file, &attr);
+    let test_name = make_test_name(&ident, &source_file, &attr);
 
     let arg_types: Punctuated<_, Token![,]> = fun
         .sig
@@ -95,7 +171,7 @@ pub fn fact(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let ts = quote! {
         #[test_case]
-        const #full_name: (&'static str, fn(#arg_types), #arg_types) = (stringify!(#full_name), #ident, #args);
+        const #full_name: (&'static str, fn(#arg_types), #arg_types) = (#test_name, #ident, #args);
 
         #fun
     };
@@ -103,20 +179,35 @@ pub fn fact(attr: TokenStream, item: TokenStream) -> TokenStream {
     ts.into()
 }
 
-fn make_full_name(ident: &Ident, source_file: &SourceFile, attr: &InterrogateAttr) -> Ident {
+fn make_test_name(ident: &Ident, source_file: &SourceFile, attr: &InterrogateAttr) -> String {
+    format!(
+        "{}:{} fn {}({})",
+        source_file.path().to_string_lossy(),
+        ident.span().unwrap().start().line,
+        ident,
+        attr.args.iter().map(|e| stringify_expr(e)).join(", ")
+    )
+}
+
+fn make_const_name(ident: &Ident, source_file: &SourceFile, attr: &InterrogateAttr) -> Ident {
     Ident::new(
         &format!(
-            "{}_{}_{}",
-            ident.to_string().to_case(Case::UpperSnake),
+            "{}_{}_{}_{}",
             source_file
                 .path()
                 .to_string_lossy()
                 .replace(|c| matches!(c, '.' | '/'), "_")
                 .to_case(Case::UpperSnake),
+            ident.to_string().to_case(Case::UpperSnake),
             attr.args
                 .iter()
                 .map(|e| stringify_expr(e))
                 .join("_")
+                .to_case(Case::UpperSnake),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
         ),
         ident.span(),
     )
